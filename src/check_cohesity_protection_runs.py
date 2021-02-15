@@ -4,10 +4,13 @@
 # This script is used to monitor the backup and copy runs in the last n days, n passed as an argument to the script.
 # The status is
 #        OK - if the number of failed backup + copy runs are within the warning and critical thresholds
-#        WARNING - if the number of failed backup + copy runs are above the warning threshold
-#        and below the critical threshold
+#           and the number of warning backup runs are within the warning_warnruns and critical_warnruns thresholds
+#        WARNING - if the number of failed backup + copy runs are above the warning threshold and below the critical threshold
+#           and the number of warning backup runs are above the warning_warnruns threshold and below the critical_warnruns threshold
 #        CRITICAL - if the number of failed backup runs are above the critical threshold
+#           and the number of warning backup runs are above the critical_warnruns threshold
 # The default warning and critical threshold is 0
+# The default warning_warnruns and critical_warnruns threshold is "no threshold"
 # Usage :
 # python check_cohesity_protection_runs.py --cluster_vip 10.10.99.100 --host_name PaulCluster
 #                                               --auth_file /abc/def/config.ini -w 60 -c 90
@@ -71,6 +74,7 @@ class CohesityProtectionStatus(nagiosplugin.Resource):
             _log.debug("get protection runs APIException raised: " + e)
         failed_backup_runs = []
         failed_copy_runs = []
+        warnings_backup_runs = []
 
         for protection_runs in protection_runs_list:
             if protection_runs.job_name.startswith("_DELETED"):
@@ -78,21 +82,30 @@ class CohesityProtectionStatus(nagiosplugin.Resource):
             try:
                 if protection_runs.backup_run.status == (
                         StatusBackupRunEnum.KFAILURE):
-                    backup_run_details = 'Job Name: ' + protection_runs.job_name + \
-                        ' Type: Backup run' + \
-                        ', Error: ' + protection_runs.backup_run.error
+                    backup_run_details = 'JobName: ' + protection_runs.job_name + \
+                        ' Type: BackupRun' + \
+                        ' Start: ' + self.epoch_to_date(protection_runs.backup_run.stats.start_time_usecs).strftime("%Y.%m.%d %H:%M:%S") + \
+                        ' Error: ' + protection_runs.backup_run.error
                     failed_backup_runs.append(backup_run_details)
+                if protection_runs.backup_run.warnings is not None:
+                    warnings_list = ', '.join(protection_runs.backup_run.warnings).replace("\n", " ")
+                    backup_run_details = 'JobName: ' + protection_runs.job_name + \
+                        ' Type: BackupRun' + \
+                        ' Start: ' + self.epoch_to_date(protection_runs.backup_run.stats.start_time_usecs).strftime("%Y.%m.%d %H:%M:%S") + \
+                        ' Warnings: ' + warnings_list
+                    warnings_backup_runs.append(backup_run_details)
                 if len(protection_runs.copy_run) > 1:
                     for protection_copy_run in protection_runs.copy_run[1:]:
                         if protection_copy_run.status == StatusCopyRunEnum.KFAILURE:
-                            copy_run_details = 'Job Name: ' + protection_runs.job_name + \
-                                               ' Type: Copy run' + \
-                                               ', Error: ' + protection_copy_run.error
+                            copy_run_details = 'JobName: ' + protection_runs.job_name + \
+                                               ' Type: CopyRun' + \
+                                               ' Start: ' + self.epoch_to_date(protection_runs.copy_run.stats.start_time_usecs).strftime("%Y.%m.%d %H:%M:%S") + \
+                                               ' Error: ' + protection_copy_run.error
                             failed_copy_runs.append(copy_run_details)
                             break
             except TypeError as e:
                 print("Error" + str(e))
-        return [failed_backup_runs, failed_copy_runs]
+        return [failed_backup_runs, failed_copy_runs, warnings_backup_runs]
 
     def probe(self):
         """
@@ -100,27 +113,35 @@ class CohesityProtectionStatus(nagiosplugin.Resource):
         :return: metric(str): nagios status.
         """
         failed_runs = self.failed_backup_runs()
-        if len(failed_runs[0]) + len(failed_runs[1]) == 0:
+        if len(failed_runs[0]) + len(failed_runs[1]) + len(failed_runs[2]) == 0:
             _log.info(
                 "Cluster ip = {}: ".format(self.args.cluster_vip) +
-                "In the past " + str(self.args.days) + " days, there are no backup/copy run failures")
+                "In the past " + str(self.args.days) + " days, there are no backup/copy run failures/warnings")
         else:
             _log.info(
                 "Cluster ip = {}: ".format(self.args.cluster_vip) +
                 "In the past " + str(self.args.days) + " days, there are " + str(len(failed_runs[0])) +
-                " backup run failures and " + str(len(failed_runs[1])) + " copy run failures")
-            for backup_run in failed_runs[0][0:5]:
-                _log.info(backup_run)
+                " backup run failures, " + str(len(failed_runs[1])) + " copy run failures and " + str(len(failed_runs[2])) + " backup run warnings")
+            for backup_run_err in failed_runs[0][0:int(self.args.limit_output)]:
+                _log.info(backup_run_err)
 
-            for copy_run in failed_runs[1][0:5]:
+            for copy_run in failed_runs[1][0:int(self.args.limit_output)]:
                 _log.info(copy_run)
 
-        metric = nagiosplugin.Metric(
+            for backup_run_warn in failed_runs[2][0:int(self.args.limit_output)]:
+                _log.info(backup_run_warn)
+
+        metricFailed = nagiosplugin.Metric(
             "Failed backup/copy runs",
             len(failed_runs[0]) + len(failed_runs[1]),
             min=0,
             context='failed_runs')
-        return metric
+        metricWarning = nagiosplugin.Metric(
+            "Warning backup runs",
+            len(failed_runs[2]),
+            min=0,
+            context='warning_runs')
+        return [metricFailed,metricWarning]
 
     def epoch_to_date(self, epoch):
         """
@@ -143,9 +164,15 @@ def parse_args():
     argp.add_argument('-d', '--days', default=1,
                       help='The number of days of protection runs to monitor')
     argp.add_argument('-w', '--warning', metavar='RANGE', default='~:0', help='return warning if'
-                                                                              ' occupancy is outside RANGE')
+                                                                              ' count of failed backup or copy runs is outside RANGE')
     argp.add_argument('-c', '--critical', metavar='RANGE', default='~:0', help='return critical if'
-                                                                               ' occupancy is outside RANGE')
+                                                                               ' count of failed backup or copy runs is outside RANGE')
+    argp.add_argument('-ww', '--warning_warnruns', metavar='RANGE', default='', help='return warning if'
+                                                                              ' count of warning backup runs is outside RANGE')
+    argp.add_argument('-cw', '--critical_warnruns', metavar='RANGE', default='', help='return critical if'
+                                                                               ' count of warning backup runs is outside RANGE')
+    argp.add_argument('-l', '--limit_output', default=5,
+                      help='The maximum number of non-ok runs per type, returned in the output (default 5)')
     argp.add_argument('-v', '--verbose', action='count', default=0, help='increase output'
                                                                          ' verbosity (use up to 3 times)')
     argp.add_argument('-t', '--timeout', default=30,
@@ -163,6 +190,11 @@ def main():
             'failed_runs',
             args.warning,
             args.critical))
+    check.add(
+        nagiosplugin.ScalarContext(
+            'warning_runs',
+            args.warning_warnruns,
+            args.critical_warnruns))
     check.main(args.verbose, args.timeout)
 
 
