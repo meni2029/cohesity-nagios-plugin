@@ -128,14 +128,20 @@ Along with common arguments, this script accepts
  This script is used to monitor the backup and copy runs in the last n days, n passed as an argument to the script.
  The status is <br/>
    - OK - if the number of failed backup + copy runs are within the warning and critical thresholds
+        <br>and the number of warning backup runs are within the warning_warnruns and critical_warnruns thresholds
    - WARNING - if the number of failed backup + copy runs are above the warning threshold
         and below the critical threshold
+        <br>and the number of warning backup runs are above the warning_warnruns threshold and below the critical_warnruns threshold
    - CRITICAL - if the number of failed backup runs are above the critical threshold 
+        <br>and the number of warning backup runs are above the critical_warnruns threshold
 
  Along with common arguments, this script accepts
- - --warning or -w: Warning threshold. Defaults to '~:0'. **Optional**
- - --critical or -c: Critical theshold. Defaults to '~:0'. **Optional**
+ - --warning or -w: Warning threshold for the failed runs. Defaults to '~:0'. **Optional**
+ - --critical or -c: Critical theshold for the failed runs. Defaults to '~:0'. **Optional**
+ - --warning_warnruns or -ww: Warning threshold for the runs with warnings. Defaults to ''. **Optional**
+ - --critical_warnruns or -cw: Critical theshold for the runs with warnings. Defaults to ''. **Optional**
  - --days or -d: The number of days of protection runs to moniter. Defaults to 1 day. **Optional**
+ - --limit_output or -l: The maximum number of non-ok runs per type, returned in the output. Defaults to 5. **Optional**
 
  Usage :
  ```
